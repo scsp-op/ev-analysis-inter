@@ -11,12 +11,23 @@ import pandas as pd
 import streamlit as st
 
 import charts
+import filters
 import pipeline
 import validate
 
 MAPPING_PATH = "parent_company_mapping.csv"
 CONSISTENCY_DATA_DIR = "data"
 _LEVEL_ICON = {"PASS": "✅", "WARN": "⚠️", "FAIL": "\U0001f6d1"}
+
+
+@st.cache_data(show_spinner=False)
+def _cached_build_master(raw, mapping_df):
+    return pipeline.build_master(raw, mapping_df)
+
+
+@st.cache_data(show_spinner=False)
+def _cached_health_check(master, xlsx_path, mapping_df):
+    return validate.health_check(master, xlsx_path, mapping_df)
 
 st.set_page_config(page_title="EV Sales Cleaner", layout="wide")
 st.title("EV Sales Cleaner")
@@ -157,9 +168,9 @@ if raw is None:
     st.stop()
 
 mapping_df = pipeline.load_mapping(MAPPING_PATH)
-master, unmapped = pipeline.build_master(raw, mapping_df)
+master, unmapped = _cached_build_master(raw, mapping_df)
 
-ok, health_rows = validate.health_check(master, xlsx_path, mapping_df)
+ok, health_rows = _cached_health_check(master, xlsx_path, mapping_df)
 render_health_check(health_rows)
 
 if not ok:
@@ -227,15 +238,19 @@ def render_chart(title, fig, key):
     )
 
 
+filter_state = filters.render_filter_sidebar(master)
+filtered = filters.apply_filters(master, filter_state)
+
 st.subheader("Charts")
+st.caption(f"{len(filtered):,} of {len(master):,} rows match the current filters.")
 
 with st.expander("Broader Tracking", expanded=True):
     for title, fn in charts.BROADER:
-        render_chart(title, fn(master), key=f"broader_{title}")
+        render_chart(title, fn(filtered), key=f"broader_{title}")
 
 with st.expander("Region-Specific Tracking", expanded=False):
     for region_name, mask_fn in charts.REGIONS.items():
         st.markdown(f"### {region_name}")
-        mask = mask_fn(master)
-        for title, fig in charts.region_charts(master, region_name, mask):
+        mask = mask_fn(filtered)
+        for title, fig in charts.region_charts(filtered, region_name, mask):
             render_chart(title, fig, key=f"region_{region_name}_{title}")

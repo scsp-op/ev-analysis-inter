@@ -77,9 +77,17 @@ DISPLAY_COUNTRY = {'USA': 'United States'}
 
 # ---- small shared helpers ---------------------------------------------------
 
-def _bev(master):
-    prop = master['Propulsion'].astype(str).str.strip()
-    return master[prop == 'BEV'].copy()
+_PROPULSION_ORDER = ['BEV', 'PHEV', 'FCEV']
+
+
+def _propulsion_label(df):
+    """Label reflecting whichever Propulsion value(s) actually survived the
+    sidebar filter (default is BEV-only, matching the old hard-coded
+    behavior, but a chart must not keep saying 'BEV' once a user filters to
+    PHEV or FCEV)."""
+    present = set(df['Propulsion'].astype(str).str.strip().unique())
+    vals = [v for v in _PROPULSION_ORDER if v in present]
+    return '/'.join(vals) if vals else 'EV'
 
 
 def _disp(country):
@@ -154,6 +162,19 @@ def _caption(fig, text, y, size=9, color=None, yanchor=None):
     )
 
 
+def _empty_fig(message='No data for the current filters'):
+    """Placeholder figure for a chart whose working frame has 0 rows or 0
+    usable years/months once filters are applied -- keeps every chart
+    function returning a valid go.Figure (fig.write_image needs one) instead
+    of crashing on an empty groupby/index lookup."""
+    fig = _new_fig(height=200)
+    fig.update_xaxes(visible=False)
+    fig.update_yaxes(visible=False)
+    fig.add_annotation(text=message, xref='paper', yref='paper', x=0.5, y=0.5,
+                        showarrow=False, font=dict(size=14, color=COLORS['dark_grey']))
+    return fig
+
+
 def _bar_label(fig, x, y, text, orientation='v', size=8):
     """Per-bar text label, replacing an ax.text(...) call anchored to a bar."""
     if orientation == 'v':
@@ -165,8 +186,11 @@ def _bar_label(fig, x, y, text, orientation='v', size=8):
 # =================  SECTION A -- BROADER TRACKING  =========================
 
 def a1_prc_vs_us_domestic(master):
-    bev = _bev(master)
+    bev = master
     years = _years(bev, start=2010)
+    if bev.empty or not years:
+        return _empty_fig()
+    label = _propulsion_label(bev)
     china_mask = bev['Sales Country'].astype(str).str.strip() == 'China'
     usa_mask = bev['Sales Country'].astype(str).str.strip() == 'USA'
     china = _annual_series(bev, years, mask=china_mask)
@@ -197,7 +221,7 @@ def a1_prc_vs_us_domestic(master):
     _add_series(china_plot, COLORS['dark_red'], 'China')
     _add_series(usa_plot, COLORS['blue'], 'United States')
 
-    fig.update_yaxes(type='log', title='BEV units sold domestically (log scale)')
+    fig.update_yaxes(type='log', title=f'{label} units sold domestically (log scale)')
     fig.update_xaxes(title='Year')
     fig.add_vline(x=2015, line_dash='dot', line_color=COLORS['dark_grey'], line_width=0.8)
     fig.add_annotation(x=2015, xref='x', y=0.98, yref='paper', text='Made in China 2025',
@@ -209,16 +233,19 @@ def a1_prc_vs_us_domestic(master):
                         showarrow=False, xanchor='center', yanchor='bottom',
                         font=dict(size=7, color=COLORS['dark_grey']))
     fig.update_layout(title=dict(
-        text='PRC vs U.S. Domestic BEV Market',
-        subtitle=dict(text='BEV sales in China have outpaced the US since 2015.',
+        text=f'PRC vs U.S. Domestic {label} Market',
+        subtitle=dict(text=f'{label} sales in China have outpaced the US since 2015.',
                        font=dict(size=9, color=COLORS['dark_grey'])),
     ))
     return fig
 
 
 def a2_china_top10_brands(master):
-    bev = _bev(master)
+    bev = master
     china = bev[bev['Parent Company Country'] == 'China']
+    if china.empty:
+        return _empty_fig()
+    label = _propulsion_label(bev)
     cols = pipeline.last_n_months(china, 12)
     totals = china.groupby('Brand')[cols].sum().fillna(0).sum(axis=1).sort_values(ascending=False)
     top10 = totals.head(10)
@@ -245,17 +272,20 @@ def a2_china_top10_brands(master):
         _bar_label(fig, x=total, y=b, text=f'  {_fmt(total)} ({pct_intl:.0f}% intl.)', orientation='h')
 
     max_total = max(bar_totals) if bar_totals else 1
-    fig.update_xaxes(title='BEV units', range=[0, max_total * 1.3])
-    fig.update_layout(title="China's Top 10 BEV Brands (last 12 months)",
+    fig.update_xaxes(title=f'{label} units', range=[0, max_total * 1.3])
+    fig.update_layout(title=f"China's Top 10 {label} Brands (last 12 months)",
                        legend=dict(x=0.98, y=0.02, xanchor='right', yanchor='bottom'))
     return fig
 
 
 def a3_foreign_chinese_sales_by_region(master):
-    bev = _bev(master)
+    bev = master
     china_foreign = bev[(bev['Parent Company Country'] == 'China') &
                          (bev['Sales Country'].astype(str).str.strip() != 'China')]
     all_months = pipeline.monthly_columns(bev)
+    if china_foreign.empty or not all_months:
+        return _empty_fig()
+    label = _propulsion_label(bev)
     start_idx = all_months.index('jan-20') if 'jan-20' in all_months else 0
     cols = all_months[start_idx:]
 
@@ -274,16 +304,19 @@ def a3_foreign_chinese_sales_by_region(master):
     fig.update_xaxes(type='category', tickmode='array',
                       tickvals=[cols[i] for i in tick_idx], ticktext=[cols[i] for i in tick_idx],
                       tickangle=90, tickfont=dict(size=6), title='Month')
-    fig.update_yaxes(title='BEV units')
-    fig.update_layout(title='Foreign Sales of Chinese EVs by Region')
+    fig.update_yaxes(title=f'{label} units')
+    fig.update_layout(title=f'Foreign Sales of Chinese {label}s by Region')
     return fig
 
 
 def a4_chinese_foreign_sales_by_company(master):
-    bev = _bev(master)
+    bev = master
     china_foreign = bev[(bev['Parent Company Country'] == 'China') &
                          (bev['Sales Country'].astype(str).str.strip() != 'China')]
     years = _years(china_foreign, start=2020)
+    if china_foreign.empty or not years:
+        return _empty_fig()
+    label = _propulsion_label(bev)
 
     companies = china_foreign['Parent Company'].dropna().unique().tolist()
     lifetime = {c: sum(_annual_series(china_foreign, years, mask=(china_foreign['Parent Company'] == c)))
@@ -311,14 +344,17 @@ def a4_chinese_foreign_sales_by_company(master):
         _bar_label(fig, x=x, y=total, text=f'{top3_share:.0f}%')
 
     fig.update_xaxes(title='Year')
-    fig.update_yaxes(title='BEV units (foreign sales)')
-    fig.update_layout(title='Chinese BEV Sales Outside of China by Company')
+    fig.update_yaxes(title=f'{label} units (foreign sales)')
+    fig.update_layout(title=f'Chinese {label} Sales Outside of China by Company')
     return fig
 
 
 def a5_global_bev_by_region(master):
-    bev = _bev(master)
+    bev = master
     years = _years(bev, start=2015)
+    if bev.empty or not years:
+        return _empty_fig()
+    label = _propulsion_label(bev)
     panels = [
         ('PRC', bev['Parent Company Country'] == 'China'),
         ('United States', bev['Parent Company Country'] == 'USA'),
@@ -351,18 +387,21 @@ def a5_global_bev_by_region(master):
             )
         fig.update_xaxes(title_text='Year', row=1, col=panel_idx + 1)
 
-    fig.update_yaxes(title_text='% of group BEV sales', row=1, col=1)
+    fig.update_yaxes(title_text=f'% of group {label} sales', row=1, col=1)
     fig.update_layout(
         legend=dict(orientation='h', yanchor='top', y=-0.22, xanchor='center', x=0.5, font=dict(size=8)),
-        title=dict(text='Global BEV Sales by Region', x=0.5),
+        title=dict(text=f'Global {label} Sales by Region', x=0.5),
     )
     _caption(fig, 'Americas excludes the US market; Asia-Pacific excludes China.', y=-0.34, size=7)
     return fig
 
 
 def a6_global_bev_by_parent_country(master):
-    bev = _bev(master)
+    bev = master
     years = _years(bev, start=2015)
+    if bev.empty or not years:
+        return _empty_fig()
+    label = _propulsion_label(bev)
     keep = ['China', 'USA', 'Germany', 'South Korea', 'France']
     bucketed = _bucket(bev['Parent Company Country'], keep)
 
@@ -384,19 +423,22 @@ def a6_global_bev_by_parent_country(master):
 
     latest_share = (china_vals[-1] / totals[-1] * 100) if totals[-1] else 0
     fig.update_xaxes(title='Year')
-    fig.update_yaxes(title='BEV units')
+    fig.update_yaxes(title=f'{label} units')
     fig.update_layout(title=dict(
-        text='Global BEV Sales by Parent Company Country',
-        subtitle=dict(text=f'China holds {latest_share:.0f}% of global BEV sales as of {years[-1]}.',
+        text=f'Global {label} Sales by Parent Company Country',
+        subtitle=dict(text=f'China holds {latest_share:.0f}% of global {label} sales as of {years[-1]}.',
                        font=dict(size=9, color=COLORS['dark_grey'])),
     ))
     return fig
 
 
 def a7_tesla_vs_byd(master):
-    bev = _bev(master)
+    bev = master
     tb = bev[bev['Brand'].isin(['Tesla', 'BYD'])]
     years = _years(tb, start=2015)
+    if tb.empty or not years:
+        return _empty_fig()
+    label = _propulsion_label(bev)
 
     byd_dom = _annual_series(tb, years, mask=(tb['Brand'] == 'BYD') & (tb['Sales Country'] == 'China'))
     byd_for = _annual_series(tb, years, mask=(tb['Brand'] == 'BYD') & (tb['Sales Country'] != 'China'))
@@ -414,14 +456,17 @@ def a7_tesla_vs_byd(master):
                           offsetgroup='BYD', hovertemplate='%{x}: %{y:,.0f}<extra>BYD foreign</extra>'))
     fig.update_layout(barmode='stack')
     fig.update_xaxes(title='Year')
-    fig.update_yaxes(title='BEV units')
-    fig.update_layout(title='Tesla vs BYD BEV Sales')
+    fig.update_yaxes(title=f'{label} units')
+    fig.update_layout(title=f'Tesla vs BYD {label} Sales')
     return fig
 
 
 def a8_us_vs_prc_foreign(master):
-    bev = _bev(master)
+    bev = master
     years = _years(bev, start=2010)
+    if bev.empty or not years:
+        return _empty_fig()
+    label = _propulsion_label(bev)
 
     us_foreign = (bev['Parent Company Country'] == 'USA') & (bev['Sales Country'] != 'USA')
     china_foreign = (bev['Parent Company Country'] == 'China') & (bev['Sales Country'] != 'China')
@@ -437,15 +482,15 @@ def a8_us_vs_prc_foreign(master):
     }
 
     fig = _new_fig(height=440, margin=dict(b=80))
-    for label, (mask, color) in series.items():
+    for series_name, (mask, color) in series.items():
         vals = _annual_series(bev, years, mask=mask)
-        fig.add_trace(go.Scatter(x=years, y=vals, mode='lines+markers', name=label,
+        fig.add_trace(go.Scatter(x=years, y=vals, mode='lines+markers', name=series_name,
                                   line=dict(color=color), marker=dict(color=color),
-                                  hovertemplate='%{x}: %{y:,.0f}<extra>' + label + '</extra>'))
+                                  hovertemplate='%{x}: %{y:,.0f}<extra>' + series_name + '</extra>'))
 
     fig.update_xaxes(title='Year')
-    fig.update_yaxes(title='Foreign BEV units')
-    fig.update_layout(title='US vs PRC Foreign BEV Sales', legend=dict(font=dict(size=8)))
+    fig.update_yaxes(title=f'Foreign {label} units')
+    fig.update_layout(title=f'US vs PRC Foreign {label} Sales', legend=dict(font=dict(size=8)))
     _caption(fig, 'Chinese-owned foreign brands: ' + ', '.join(CHINESE_OWNED_FOREIGN_BRANDS), y=-0.20, size=7)
     return fig
 
@@ -466,6 +511,9 @@ BROADER = [
 
 def _b1_domestic_by_country(region_bev, region_name):
     years = _years(region_bev, start=2022)
+    if region_bev.empty or not years:
+        return _empty_fig(f'No data in {region_name} for the current filters')
+    label = _propulsion_label(region_bev)
     quarters = []  # (label, cols)
     for y in years:
         for q in (1, 2, 3, 4):
@@ -490,8 +538,8 @@ def _b1_domestic_by_country(region_bev, region_name):
                                   hovertemplate='%{x}: %{y:,.0f}<extra>' + country + '</extra>'))
 
     fig.update_xaxes(type='category', tickangle=90, tickfont=dict(size=7), title='Quarter')
-    fig.update_yaxes(title='BEV units')
-    fig.update_layout(title=f'Domestic BEV Sales in {region_name} by Country', legend=dict(font=dict(size=7)))
+    fig.update_yaxes(title=f'{label} units')
+    fig.update_layout(title=f'Domestic {label} Sales in {region_name} by Country', legend=dict(font=dict(size=7)))
     return fig
 
 
@@ -500,6 +548,9 @@ def _b2_top_brands(region_bev, region_name):
     # domestic/overseas, Chinese-Malaysian JVs, etc.). Not implemented here --
     # this generalized parent-company-country stack applies to every region.
     # Hand-customize this function for Southeast Asia if that breakdown is needed.
+    if region_bev.empty:
+        return _empty_fig(f'No data in {region_name} for the current filters')
+    label = _propulsion_label(region_bev)
     top10 = _rank_brands(region_bev, months=12, top=10)
     cols = pipeline.last_n_months(region_bev, 12)
     brands = list(top10.index)
@@ -516,8 +567,8 @@ def _b2_top_brands(region_bev, region_name):
                               marker_color=_country_color(country),
                               hovertemplate='%{y}: %{x:,.0f}<extra>' + _disp(country) + '</extra>'))
     fig.update_layout(barmode='stack')
-    fig.update_xaxes(title='BEV units')
-    fig.update_layout(title=f"{region_name}'s Top 10 BEV Brands (last 12 months)",
+    fig.update_xaxes(title=f'{label} units')
+    fig.update_layout(title=f"{region_name}'s Top 10 {label} Brands (last 12 months)",
                        legend=dict(x=0.98, y=0.02, xanchor='right', yanchor='bottom', font=dict(size=7)))
     return fig
 
@@ -526,6 +577,9 @@ def _b3_donut(region_bev, region_name):
     # HOOK: the doc splits Vietnam into domestic/international for the SEA
     # version of this chart. Not implemented -- default is a straight
     # parent-company-country donut, same as every other region.
+    if region_bev.empty:
+        return _empty_fig(f'No data in {region_name} for the current filters')
+    label = _propulsion_label(region_bev)
     cols = pipeline.last_n_months(region_bev, 12)
     country = _bucket(region_bev['Parent Company Country'], list(COUNTRY_COLORS.keys()))
     totals = region_bev.groupby(country)[cols].sum().fillna(0).sum(axis=1)
@@ -549,13 +603,25 @@ def _b3_donut(region_bev, region_name):
     fig.add_trace(go.Pie(labels=labels, values=totals.values, marker=dict(colors=colors), hole=0.6,
                           texttemplate='%{percent:.0%}', textposition='inside', textfont=dict(size=8),
                           hovertemplate='%{label}: %{value:,.0f} (%{percent})<extra></extra>'))
-    fig.update_layout(title=f'BEV Sales in {region_name} by Parent Company Country (last 12 months)')
+    fig.update_layout(title=f'{label} Sales in {region_name} by Parent Company Country (last 12 months)')
     return fig
 
 
 def _b4_small_multiples(region_bev, region_name):
     years = _years(region_bev, start=2022)
+    if region_bev.empty or not years:
+        return _empty_fig(f'No data in {region_name} for the current filters')
+    label = _propulsion_label(region_bev)
     countries = sorted(region_bev['Sales Country'].dropna().unique().tolist())
+    # Cap facet count: Plotly's facet grid errors out past ~30 rows (vertical
+    # spacing can't shrink enough), and an unfiltered/broadly-filtered "Custom"
+    # region can easily span 100+ countries. Curated regions (SEA, Europe)
+    # never hit this cap; it only bites the free-form case.
+    MAX_FACETS = 24
+    if len(countries) > MAX_FACETS:
+        cols_all = pipeline.last_n_months(region_bev, 12)
+        totals = region_bev.groupby('Sales Country')[cols_all].sum().fillna(0).sum(axis=1)
+        countries = sorted(totals.sort_values(ascending=False).head(MAX_FACETS).index.tolist())
     n = max(len(countries), 1)
     ncols = min(6, n)
     nrows = math.ceil(n / ncols)
@@ -573,7 +639,7 @@ def _b4_small_multiples(region_bev, region_name):
     fig = px.bar(long_df, x='Series', y='Total', facet_col='Country', facet_col_wrap=ncols,
                  color='Series', color_discrete_map={'China': COLORS['dark_red'], 'US': COLORS['blue']},
                  height=height)
-    fig.update_layout(showlegend=False, title=f'PRC vs US BEV Sales in {region_name} ({years[0]}-{years[-1]})',
+    fig.update_layout(showlegend=False, title=f'PRC vs US {label} Sales in {region_name} ({years[0]}-{years[-1]})',
                        plot_bgcolor=COLORS['white'], paper_bgcolor=COLORS['white'],
                        font=dict(size=12, color=COLORS['black']))
     fig.for_each_annotation(lambda a: a.update(text=a.text.split('=')[-1], font=dict(size=8)))
@@ -586,13 +652,15 @@ def _b4_small_multiples(region_bev, region_name):
 REGIONS = {
     'Southeast Asia': lambda master: master['Sales Country'].isin(SEA_COUNTRIES),
     'Europe': lambda master: master['Sales Sub-Region'].astype(str).str.strip().isin(EUROPE_SUBREGIONS),
+    # Lets the b1-b4 chart template render for any ad-hoc sidebar filter
+    # combination, not just the two curated presets above.
+    'Custom (current filter)': lambda master: pd.Series(True, index=master.index),
 }
 
 
 def region_charts(master, region_name, mask):
     """mask: boolean Series aligned to `master`'s index (e.g. from REGIONS[name](master))."""
-    bev = _bev(master)
-    region_bev = bev[mask.reindex(bev.index)]
+    region_bev = master[mask]
     return [
         (f'Domestic BEV Sales in {region_name} by Country', _b1_domestic_by_country(region_bev, region_name)),
         (f"{region_name}'s Top 10 BEV Brands", _b2_top_brands(region_bev, region_name)),
