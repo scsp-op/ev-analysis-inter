@@ -240,7 +240,7 @@ def a1_prc_vs_us_domestic(master):
     return fig
 
 
-def a2_china_top10_brands(master):
+def a2_china_top10_brands(master, top_n=10):
     bev = master
     china = bev[bev['Parent Company Country'] == 'China']
     if china.empty:
@@ -248,7 +248,7 @@ def a2_china_top10_brands(master):
     label = _propulsion_label(bev)
     cols = pipeline.last_n_months(china, 12)
     totals = china.groupby('Brand')[cols].sum().fillna(0).sum(axis=1).sort_values(ascending=False)
-    top10 = totals.head(10)
+    top10 = totals.head(top_n)
 
     domestic_mask = china['Sales Country'].astype(str).str.strip() == 'China'
     domestic = china[domestic_mask].groupby('Brand')[cols].sum().fillna(0).sum(axis=1) \
@@ -273,7 +273,7 @@ def a2_china_top10_brands(master):
 
     max_total = max(bar_totals) if bar_totals else 1
     fig.update_xaxes(title=f'{label} units', range=[0, max_total * 1.3])
-    fig.update_layout(title=f"China's Top 10 {label} Brands (last 12 months)",
+    fig.update_layout(title=f"China's Top {top_n} {label} Brands (last 12 months)",
                        legend=dict(x=0.98, y=0.02, xanchor='right', yanchor='bottom'))
     return fig
 
@@ -509,7 +509,7 @@ BROADER = [
 
 # =================  SECTION B -- REGION-SPECIFIC  ===========================
 
-def _b1_domestic_by_country(region_bev, region_name):
+def _b1_domestic_by_country(region_bev, region_name, top_n=8):
     years = _years(region_bev, start=2022)
     if region_bev.empty or not years:
         return _empty_fig(f'No data in {region_name} for the current filters')
@@ -527,7 +527,7 @@ def _b1_domestic_by_country(region_bev, region_name):
         cols_all = [c for _, c in quarters]
         flat_cols = [c for cs in cols_all for c in cs]
         totals = region_bev.groupby('Sales Country')[flat_cols].sum().fillna(0).sum(axis=1)
-        countries = totals.sort_values(ascending=False).head(8).index.tolist()
+        countries = totals.sort_values(ascending=False).head(top_n).index.tolist()
 
     fig = _new_fig(height=460, margin=dict(b=90, r=140))
     labels = [lbl for lbl, _ in quarters]
@@ -543,7 +543,7 @@ def _b1_domestic_by_country(region_bev, region_name):
     return fig
 
 
-def _b2_top_brands(region_bev, region_name):
+def _b2_top_brands(region_bev, region_name, top_n=10):
     # HOOK: the doc's SEA version splits into bespoke segments (Vietnamese
     # domestic/overseas, Chinese-Malaysian JVs, etc.). Not implemented here --
     # this generalized parent-company-country stack applies to every region.
@@ -551,7 +551,7 @@ def _b2_top_brands(region_bev, region_name):
     if region_bev.empty:
         return _empty_fig(f'No data in {region_name} for the current filters')
     label = _propulsion_label(region_bev)
-    top10 = _rank_brands(region_bev, months=12, top=10)
+    top10 = _rank_brands(region_bev, months=12, top=top_n)
     cols = pipeline.last_n_months(region_bev, 12)
     brands = list(top10.index)
     sub = region_bev[region_bev['Brand'].isin(brands)].copy()
@@ -568,7 +568,7 @@ def _b2_top_brands(region_bev, region_name):
                               hovertemplate='%{y}: %{x:,.0f}<extra>' + _disp(country) + '</extra>'))
     fig.update_layout(barmode='stack')
     fig.update_xaxes(title=f'{label} units')
-    fig.update_layout(title=f"{region_name}'s Top 10 {label} Brands (last 12 months)",
+    fig.update_layout(title=f"{region_name}'s Top {top_n} {label} Brands (last 12 months)",
                        legend=dict(x=0.98, y=0.02, xanchor='right', yanchor='bottom', font=dict(size=7)))
     return fig
 
@@ -658,12 +658,17 @@ REGIONS = {
 }
 
 
-def region_charts(master, region_name, mask):
-    """mask: boolean Series aligned to `master`'s index (e.g. from REGIONS[name](master))."""
+def region_charts(master, region_name, mask, top_n=None):
+    """mask: boolean Series aligned to `master`'s index (e.g. from REGIONS[name](master)).
+    top_n: optional {'b1_countries': int, 'b2_brands': int} overriding the
+    default top-N cutoffs for the country-trend and brand-ranking charts."""
     region_bev = master[mask]
+    top_n = top_n or {}
+    b1_n = top_n.get('b1_countries', 8)
+    b2_n = top_n.get('b2_brands', 10)
     return [
-        (f'Domestic BEV Sales in {region_name} by Country', _b1_domestic_by_country(region_bev, region_name)),
-        (f"{region_name}'s Top 10 BEV Brands", _b2_top_brands(region_bev, region_name)),
+        (f'Domestic BEV Sales in {region_name} by Country', _b1_domestic_by_country(region_bev, region_name, top_n=b1_n)),
+        (f"{region_name}'s Top 10 BEV Brands", _b2_top_brands(region_bev, region_name, top_n=b2_n)),
         (f'BEV Sales in {region_name} by Parent Company Country', _b3_donut(region_bev, region_name)),
         (f'PRC vs US BEV Sales in {region_name}', _b4_small_multiples(region_bev, region_name)),
     ]

@@ -215,42 +215,64 @@ if unmapped:
         else:
             st.info("No Parent Company values were filled in -- nothing saved.")
 
-buf = io.BytesIO()
-master.to_excel(buf, index=False, engine="openpyxl")
-st.download_button(
-    "Download master.xlsx",
-    data=buf.getvalue(),
-    file_name="master.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-)
+# master.to_excel() (openpyxl, ~203 columns) takes ~39s -- same eager-work
+# trap as the per-chart PNG export below: unconditionally rebuilding it on
+# every single rerun made every filter/mapping/button interaction on the
+# page pay that cost regardless of whether the file was ever downloaded.
+# Deferred to an explicit click, keyed on the mapping's row count so a
+# stale export gets invalidated after "Save mappings" changes the data.
+master_xlsx_state_key = f"master_xlsx_bytes_{len(unmapped)}"
+if st.button("Prepare master.xlsx"):
+    buf = io.BytesIO()
+    master.to_excel(buf, index=False, engine="openpyxl")
+    st.session_state[master_xlsx_state_key] = buf.getvalue()
+if master_xlsx_state_key in st.session_state:
+    st.download_button(
+        "Download master.xlsx",
+        data=st.session_state[master_xlsx_state_key],
+        file_name="master.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 def render_chart(title, fig, key):
     st.markdown(f"#### {title}")
     st.plotly_chart(fig, use_container_width=True, theme=None, key=f"plot_{key}")
-    png_buf = io.BytesIO()
-    fig.write_image(png_buf, format="png", scale=2)
-    st.download_button(
-        f"Download PNG -- {title}",
-        data=png_buf.getvalue(),
-        file_name=f"{title.lower().replace(' ', '_')}.png",
-        mime="image/png",
-        key=key,
-    )
+    # kaleido's write_image() drives a headless Chrome render per chart --
+    # 1-2s each, ~40s for the full page. With filtering, nearly every widget
+    # interaction reruns this whole script, so eagerly exporting all charts'
+    # PNGs on every rerun (regardless of whether a download is ever clicked)
+    # made every filter change take ~40s. Deferred to an explicit click instead.
+    png_state_key = f"png_bytes_{key}"
+    if st.button(f"Prepare PNG -- {title}", key=f"prep_{key}"):
+        png_buf = io.BytesIO()
+        fig.write_image(png_buf, format="png", scale=2)
+        st.session_state[png_state_key] = png_buf.getvalue()
+    if png_state_key in st.session_state:
+        st.download_button(
+            f"Download PNG -- {title}",
+            data=st.session_state[png_state_key],
+            file_name=f"{title.lower().replace(' ', '_')}.png",
+            mime="image/png",
+            key=key,
+        )
 
 
 filter_state = filters.render_filter_sidebar(master)
 filtered = filters.apply_filters(master, filter_state)
+top_n = filter_state.get("top_n", {})
 
 st.subheader("Charts")
-st.caption(f"{len(filtered):,} of {len(master):,} rows match the current filters.")
+st.caption(f"{len(filtered):,} of {len(master):,} rows match the last-applied filters.")
+
+BROADER_KWARGS = {"China's Top 10 BEV Brands": {"top_n": top_n.get("a2_china_brands", 10)}}
 
 with st.expander("Broader Tracking", expanded=True):
     for title, fn in charts.BROADER:
-        render_chart(title, fn(filtered), key=f"broader_{title}")
+        render_chart(title, fn(filtered, **BROADER_KWARGS.get(title, {})), key=f"broader_{title}")
 
 with st.expander("Region-Specific Tracking", expanded=False):
     for region_name, mask_fn in charts.REGIONS.items():
         st.markdown(f"### {region_name}")
         mask = mask_fn(filtered)
-        for title, fig in charts.region_charts(filtered, region_name, mask):
+        for title, fig in charts.region_charts(filtered, region_name, mask, top_n=top_n):
             render_chart(title, fig, key=f"region_{region_name}_{title}")
